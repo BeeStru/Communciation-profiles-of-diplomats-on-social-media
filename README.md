@@ -1,4 +1,4 @@
-# Diplomats-communicate-on-social-media
+# Communciation profiles of diplomats on social media
 Keywords: Data collection, wrangling and visualisation, sentiment analysis, correspondence and cluster analysis.
 
 ## Project overview
