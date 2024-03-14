@@ -1,0 +1,243 @@
+---
+title: "Github, Twitter diplos"
+output: html_document
+date: "2024-03-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Libaries, message=FALSE, warning=FALSE, include=FALSE}
+library(ROAuth) # for Twitter authentication
+library(academictwitteR) # for data collection
+library(dplyr) # for data wrangling and analysis
+library(stringr) # for data wrangling in sentiment analysis
+library(tm) # for data wrangling in sentiment analysis
+library (tidytext) # for sentiment analysis
+library(FactoMineR) # for correspondence analysis and clustering analysis
+library(factoextra) # for correspondence analysis and clustering analysis
+library(forcats) # for data visualisation
+library(ggplot2) # for data visualisation
+```
+
+# 1. Project overview
+This project analyses the content of tweets posted by Chinese diplomats on the platform X (Twitter) over a 5-year period. The goal is to answer the following questions: (1) what topics, locations, functions, and level of assertiveness are most prominent? (2) what distinct communication profiles do these features and their associations reveal? The data came from a list of 187 diplomats, who produced 271,787 original tweets and quotes from from 1 January 2017 to 1 July 2022. Full details will be publicly available in a forthcoming publication by Sullivan, Struve, and Wang (2024). 
+
+# 2. Data collection and wrangling
+## 2.1 Retrieve Twitter data
+We created a list of 187 Chinese diplomats for this study through synergy of multiple sources. The data was collected following ethics approval and application to Twitter's developer account. Twitter users can change their handle, so we retrieved the user ID for the purpose of data collection. 
+
+```{r Create list of Twitter users, eval=FALSE, message=FALSE, warning=FALSE}
+# Store Twitter authentication info as environment variable for data collection
+# Retrieve ID for each Twitter handle using authentication
+diplo_names <- readxl::read_xlsx("diplo_list_2507123.xlsx")
+diplo_id <- get_user_id(diplo_names$handle, bearer_token=get_bearer(), all=TRUE, keep_na=FALSE)
+diplo_list <- diplo_names %>% left_join(diplo_id)
+```
+
+Loop through each of the 187 users with the search query. This stores user and tweet-level information in a .json format which are then bound into a single tidyframe. Each tweet has its own row. The R package 'academictwitteR' allows full archive search and various search parameters. This was necessary given the large time frame and to limit the query to original tweets and quotes only (excluding retweets and replies). Then, I filtered for tweets written in English or Chinese for our analysis and for relevant metadata. This yields 271.787 tweets.
+
+```{r Retrieve data from every Twitter user: original tweets and quotes, eval=FALSE, message=FALSE, warning=FALSE}
+# Define function with search query for data collection 
+get_original_and_quotes <- function(id){
+  academictwitteR:: get_all_tweets(
+    users = diplo_id, 
+    start_tweets = "2017-01-01T00:00:00Z",
+    end_tweets = "2022-07-01T00:00:00Z",
+    is_retweet = FALSE,
+    is_reply = FALSE,
+    n=Inf, 
+    data_path = "tweets_orig_and_quotes",
+    bind_tweets = FALSE)}
+
+# Loop through each user with search query for data collection (producing .json files)
+purrr::walk(diplo_list[['diplo_id']], get_original_and_quotes)
+```
+
+```{r Bind into dataframe and filter, message=FALSE, warning=FALSE}
+# Bind json files into a single tidy dataframe
+tweets_orig_and_quotes <- bind_tweets (data_path = "tweets_orig_and_quotes", output_format = "tidy") 
+
+# Filter for tweets in English and Chinese and relevant metadata
+tweets_stripped <- tweets_orig_and_quotes %>%
+  select("tweet_id", "user_username", "user_name", "created_at", "text", "lang") %>%
+  filter(lang == 'en' | lang == 'zh')
+```
+
+```{r Data volume}
+# The dataset includes 271,787 rows and 6 columns. Each tweet has its own row.
+dim(tweets_stripped)
+```
+
+## 2.2 Add sentiment score for each tweet
+To aid the manual coding, I computed a sentiment score for each tweet. This will help the manual coding of the level of assertiveness: There is an inherent subjectivity when measuring the assertiveness of a tweet, but with three experienced coders and the aid of the sentiment score this is reasonably reduced. I used the AFINN lexicon for the sentiment analysis: developed by Finn Årup Nielsen, words are not classified in a binary fashion but are assigned a numerical value ranging from -5 (the most negative) to +5 (the most positive).
+
+```{r Pre-process tweets for sentiment analysis, include=FALSE}
+# Pre-processing tweets for sentiment analysis
+tweets_s_cleaned <- tweets_stripped %>%
+  mutate(text=str_replace_all(text, "https\\S*", "")) %>% # urls
+  mutate(text=str_replace_all(text, "@\\S*", "")) %>% # mentions
+  mutate(text=str_replace_all(text, "[\r\n\t]", "")) %>% # dividers
+  mutate(text=removeNumbers(text)) %>% # numbers
+  mutate(text=removePunctuation(text)) %>%  # punctuation
+  mutate(text=str_squish(text))
+```
+
+Tokenise and remove stopwords. The unnest_tokens () function splits the tweet text into a one word per line format and put this in a column called word. I applied stopword lists for both English and Chinese words. The stopword packages I used are commonly used in text analytics. Small note though of the continuing discussion about challenges of word segmentation with Chinese characters (eg, Ma, Ganchev, and Weiss 2024: 'State-of-the-art Chinese Word Segmentation with Bi-LSTMs' or Huang et al. 2020: 'Towards Fast and Accurate Neural Chinese Word Segmentation with Multi-Criteria Learning'). 
+
+```{r Tokenisation, fig.width=11, message=FALSE, warning=FALSE}
+# Tokenise and remove stopwords
+tweets_s_tidy <- tweets_s_cleaned %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word") %>%
+  anti_join(get_stopwords(language = "zh", source = "stopwords-iso")) 
+
+head(tweets_s_tidy %>% select(tweet_id,user_name,created_at, lang, word))
+```
+
+Assign a sentiment score to each token using the AFINN lexicon. Then, group these back to tweet level and compute an average and total sentiment score for each tweet. Use group_by() to group each tweet’s words back together, filter out all the words without a sentiment value using filter(), and finally summarise(), mean() and sum() to produce an average and total sentiment value. Then use the left_join function to add the sentiment values to the data frame of tweets. 
+
+```{r Compute sentiment score for each tweet, message=FALSE, warning=FALSE, include=FALSE}
+# Read the AFINN dictionary from the textdata package and apply to each word  
+sent <- get_sentiments("afinn")
+token_sent <- tweets_s_tidy %>% left_join(sent)
+
+# Group words back to tweet level: Compute mean and total sentiment score
+tweets_s_values <- token_sent %>%
+  group_by(tweet_id) %>%
+  filter(!is.na(value)) %>%
+  summarise(average.value = mean(value), total.value = sum(value))
+
+# Append sentiment score to dataframe of tweets
+diplo_final_tweets <- tweets_stripped %>%
+  left_join(tweets_s_values)%>%
+  rename(sentiment_avg = average.value, sentiment_total = total.value) # renames sentiment variable names (avg.value & total.value)
+```
+
+Here is a histogram that shows how frequently we had tweets with a certain sentiment score (range). There seem to be a skew towards the right side of the scale. Interesting - seems we were right in addressing the research gap: quite a few more tweets are positive.
+
+```{r Data inspection, warning=FALSE}
+diplo_final_tweets %>%
+  ggplot(aes(x = sentiment_avg)) +
+  geom_histogram(bins = 20, fill = 'grey', colour = 'black') +
+  geom_vline(xintercept = 0, lwd = 1, lty = 'dashed') +
+  theme_minimal() + 
+  labs(title = "Nr of tweets by sentiment level", subtitle = "Range from -5 (negative) to +5 (positive)")
+```
+
+```{r Data inspection: Example tweets, fig.width=11}
+# Example: Show the 10 most positive tweets
+diplo_final_tweets %>%
+  select(user_username, text, sentiment_total) %>%
+  arrange(desc(sentiment_total)) %>%
+  head(10)
+```
+
+## 2.3 Create final coding sample for manual coding
+Now the data is ready for manual coding in Excel, following successful piloting of our coding framework. As a reminder, we are interested in the topic, location, function, and assertiveness variables. I used stratified random sampling to ensure that each diplomat is represented in the final coding sample. We coded 2646 tweets.
+
+```{r Create sample for coding, eval=FALSE, message=FALSE, warning=FALSE}
+# Create sample for coding
+tweets_sample <- diplo_final_tweets %>%
+  group_by(user_username) %>%
+  slice_sample(prop = 0.01)
+
+# Write file for coding
+write.xlsx(tweets_sample, "tweets_sample_250723.xlsx", fileEncoding = "UTF-8") # UTF-8 for Chinese 
+```
+
+# 3. Data analysis: Summary statistics
+Now the manual coding is completed and ready for analysis. Here is an overview of how frequently each topic, location, function and lv of assertiveness was present in the sample data. These are coded as binary variables with 0 for absence and 1 for presence (a total of 42 variables). First a table overview, then some data visualization for better interpretation. The table overview helped spotting mistakes in the coding, which we corrected in the Excel file and then re-uploaded.
+
+```{r Data loading and wrangling, warning=FALSE}
+# Load coding observations
+tweets_coded <- readxl::read_xlsx("tweets_coded_250723.xlsx")
+
+# Table overview with example variables
+head(Hmisc:: describe(tweets_coded))
+```
+
+Here is some data visualization that is easier to interpret, with variables sorted by frequency of occurrence. Responding to the first research question, there are some take-aways here already. Tweets with a low level of assertiveness are by far most prominent. Regarding the communication function, tweets most prominently inform or promote, and have the PRC very strongly in focus. We can see that a wide range of topics covered, though with different degree of frequency. Altogether, this already paints a very clear picture regarding the research gap we wanted to address: a focus only on 'wolf warrior' traits does not account for what is most prominently present in the Twitter communications of the Chinese diplomats. 
+
+```{r Summary statistics: Frequency plot of all variables, fig.height=9, fig.width=11, warning=FALSE}
+freq_coded<- readxl:: read_xlsx("tweets_coded_freq_250723.xlsx")
+print(freq_plot <- freq_coded %>% 
+  ggplot(aes(x= fct_inorder(Variable), y = Present, fill = Category)) + 
+  geom_col(width = .70, position = position_dodge(width = .70))+ 
+  geom_text(aes(label= Present), hjust = .2, size = 3, position = position_dodge(width = 0.7)) + 
+  coord_flip() + labs(x = "variables", y = "count", title = "Freq of topic, location, function & assertiveness (N=2646)"))
+```
+
+# 4. Data analysis: Correspondence analysis and hierarchical clustering
+Next, I turn to exploratory efforts in order to answer the second research question. I seek to understand how the various observations we coded for relate to each other. This allows conclusions on any clusters of communication behaviour (which in our publication we use to discuss distinct commucniation profiles). Various options exist to analyse the interrelationships between variables. The focus here is on Multiple Correspondence Analysis (MCA): it is an extension of principal component analysis for when the variables to be analysed are categorical instead of quantitative. 
+
+## 4.1 Check data suitability for MCA
+First test the suitability of the data and adjust the data structure to ready it for the subsequent MCA. As, there are various low correlations that would bias the findings if left untreated. THis is not surprising, for example, because of the low presence of various variables (see summary statistics, e.g. topic diaspora). Going through multiple iterations, several variables were removed, leaving 20 variables that are suitable for MCA. Various commonly used tests confirm as below, eg Bartlett and KMO tests.
+
+```{r Slim data for further analysis and check suitability for MCA)}
+# Remove variables with very marginal presence or correlations
+tweets_coded_slim <- select (tweets_coded, -Religion_and_Philosophy, -Ethnicity, -Diaspora, -Oceania, -India, -Russia, -The_Developing_World, -Japan, -South_America, -North_America_other, -Non_assertive,-Climate, -Health, -Europe, -Africa, -Asia_other, -Diplomacy, -Governance_and_PartyAffairs, -Reinforce, -Topic_None_or_unsure, -Location_None_or_unsure, -Function_None_or_unsure)
+
+psych:: cortest.bartlett(tweets_coded_slim)
+psych:: KMO(tweets_coded_slim)
+```
+
+## 4.2 Run Multiple Correspondence analysis
+Convert all binary variables into factors and then use the MCA() function from the FactoMineR package.
+
+```{r}
+# Convert all binary variables into factors and run MCA 
+df.2 <- tweets_coded_slim %>% 
+  mutate_if(~ is.numeric(.) && all(unique(.) %in% c(0, 1, NA)), factor)
+
+res.mca <- MCA(df.2, ncp=6, graph=FALSE)
+
+# Visualise eigenvalues and contribution in bar chart
+fviz_screeplot(res.mca, addlabels = TRUE, ylim = c(0, 45))
+
+# Visualise most defining variable categories for each dimension. Dimension 1 as example here
+fviz_contrib(res.mca,  choice ="var", axes = 1)
+```
+
+Note to distinguish between variable categories: both the absence (variable name ending "_0") and presence ("_1") can be defining features of a dimension (nad ultimately help explaining data variability). I am using a more intuitive plot to interpret the findings. 
+
+```{r To visualize the correlation between variables and MCA principal dimensions}
+grp <- res.mca$call$X$Assertive
+fviz_mca_biplot(res.mca, axes = c(1,2), label="var", col.var ="steelblue", habillage=grp, 
+                addEllipses=TRUE, ellipse.level=0.95, select.var = list(contrib = 20)) + theme_minimal()
+```
+
+The output for dimensions 1 and 2 are represented as a factor map with the top 10 contributing variable categories. It shows the relationship between the variable categories for dimension 1 on the x-axis and dimension 2 on the y-axis. 
+Added spheres for the point cloud of tweets further differentiates whether a tweet was assertive. While there is some overlap, the spheres in the factor map strongly signal that more and less assertive tweets focus on different topics, locations, or functions. 
+
+Variable categories with a similar profile are grouped together. Negatively associated variable categories are positioned on the opposite sides of the plot origin. Dimension 1 is defined by a high level of assertiveness, the functions criticise, challenge, and provoke, the locations the US and the West, and the topic of sovereignty and hegemony. Their proximity highlights the strong positive association between these variables. It is noteworthy that the PRC is located on the other end of the x-axis to this set of variables, signalling a negative correlation. In other words, when diplomats talk about China they do so in a way that is distinct from the defining characteristics of dimension 1. Dimension 2 is defined by the presence of informing and the topics of technology and economy, and a negative correlation with promoting and the topic of culture and tourism. More of this becomes clear through the clustering analysis.
+
+## 4.3 Hierarchical clustering (HCPC)
+The information produced by the MCA then served as input for the Hierarchical clustering upon principal components (HCPC) analysis.
+```{r fig.width=12, warning=FALSE}
+options(width = 200)
+res.hcpc <- HCPC (res.mca, nb.clust = 5 , metric = "euclidean", graph = FALSE)
+res.hcpc$desc.var
+```
+
+Responding to the second research question, we found five distinct clusters of communication behaviour based on the associations between the variables we coded for. Full details will be in our publication, but here some insights already.
+
+Cluster 1 refers to what we define as the informer profile. It is defined by the strong association between informing, economy and technology, and the absence of assertiveness. The summary statistics already highlighted that informing makes up a large part of what the diplomats do, with almost every second tweet doing so (N= 1109). 
+
+Cluster 2 refers to the promoter profile. In cluster 2 the absence of various variable categories can be seen, yet we also note that these were defining features of other clusters. Cluster 2 is again defined by the lack of assertiveness, as well as the presence and association of promoting, culture and tourism, and a focus on the PRC focus. The summary statistics shows how important promoting is to the diplomats, it is the most frequently use communication function and can found in almost every second tweet. 
+
+Cluster 3 describes the challenger profile in relation to PRC_special (e.g., Xinjiang, Tibet, Hong Kong). The range of defining variable categories is small, yet conclusive: there is a strong location focus on PRC_special, coupled with assertiveness, challenging, and the topics of human rights and sovereignty and hegemony. The summary statistics shows that this cluster receives much less attention to the previous ones, but is a defining feature of data variability. Filtering for tweets that focus on PRC_special shows some nuance in the communication behaviour: one third of the tweets are assertive, mainly covering human rights, sovereignty and hegemony, and governance and party affairs in roughly equal amounts. Yet, another feature are the non-assertive tweets, which focus on promoting the culture and tourism of the area.
+
+Cluster 4 describes the challenger profile in relation to Taiwan. The range of defining variable categories is equally small, yet cluster 4 is clearly defined by the presence of various aspects. Besides the Taiwan focus, there seem to be a strong association between assertiveness, challenging, and the topics of sovereignty and hegemony and security. The summary statistics shows that Taiwan was rarely covered. Filtering for tweets on Taiwan highlights a very narrow field of communication focus, with two thirds focusing on the topic of sovereignty and hegemony, with diplomacy and security receiving some attention.
+
+Cluster 5 is clearly distinguishable from the other clusters as the provoker profile. This cluster is uniquely defined by a high level of assertiveness and the provoke function variable. The functions criticise and challenge also appear in this cluster. Unsurprisingly to China politics researchers, the US and ‘The West’ are defining locations for this cluster. The topics of foreign affairs, sovereignty and hegemony, and security are strongly associated with it. The summary statistics demonstrates that in terms of frequency of occurrence, provoking and a high level of assertiveness were quite rare. Filtering for these two variables though produces a clear take-away in terms of target: roughly 2/3 of tweets that either provoke or are highly assertive focus on the US. Other locations that appear include special regions of the PRC, Taiwan and the West. 
+
+# 5. Conclusion
+This study found that Chinese diplomats employ a range of distinct communication roles on Twitter. Informing and promoting were by far the primary communication functions. The functions of challenging, criticising, and provoking were marginally present, yet assertiveness and their use in a specific content context were their common denominator. 
+
+The findings provide evidence that on aggregate level Chinese diplomats are primarily using Twitter as a vehicle for informing and promoting. The informer profile is characterised by neutral language,  a range of topics like the economy, technology, health or diplomatic activity, with focus on China itself or in relation to other geographies such as South East Asia. The promoter profile similarly covers a range of different topics, but does so especially with focus on topics related to culture and tourism (e.g., highlighting beautiful landscapes), and is with China and its administrative regions (e.g., Hong Kong, Xinjiang, Tibet) predominantly inward looking. Our findings echo what China researchers may already know about the leadership's priority to portray the "peaceful rise" of China.
+
+Contrasting to this, we also found communication profiles linked to assertiveness and a specific content context. Assertiveness was marginally present, but a defining feature of how their communciation behaviour differs. With a focus on China’s administrative regions and Taiwan, we found assertiveness and the challenger profile linked to topics of sovereignty and human rights among other. The provoker profile stands out in utilising assertiveness and even a high level of assertiveness, across the range of functions of criticising, challenging, and provoking, in the context of topics like  foreign affairs, sovereignty and hegemony, and security. A high level of assertiveness is with 2/3 tweets mostly associated with the USA, yet we also found prominent the general reference to ‘The West’. 
+
+Thus, we concluded based on our study on distinctive patterns in the content and style of Chinese diplomatic communications. We discuss our observations of the distinct communciaiton profiles more in the forthcoming publication. Be excited!
