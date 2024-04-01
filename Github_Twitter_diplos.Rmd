@@ -209,12 +209,14 @@ fviz_mca_biplot(res.mca, axes = c(1,2), label="var", col.var ="steelblue", habil
 ```
 
 The output for dimensions 1 and 2 are represented as a factor map with the top 10 contributing variable categories. It shows the relationship between the variable categories for dimension 1 on the x-axis and dimension 2 on the y-axis. 
+
 Added spheres for the point cloud of tweets further differentiates whether a tweet was assertive. While there is some overlap, the spheres in the factor map strongly signal that more and less assertive tweets focus on different topics, locations, or functions. 
 
 Variable categories with a similar profile are grouped together. Negatively associated variable categories are positioned on the opposite sides of the plot origin. Dimension 1 is defined by a high level of assertiveness, the functions criticise, challenge, and provoke, the locations the US and the West, and the topic of sovereignty and hegemony. Their proximity highlights the strong positive association between these variables. It is noteworthy that the PRC is located on the other end of the x-axis to this set of variables, signalling a negative correlation. In other words, when diplomats talk about China they do so in a way that is distinct from the defining characteristics of dimension 1. Dimension 2 is defined by the presence of informing and the topics of technology and economy, and a negative correlation with promoting and the topic of culture and tourism. More of this becomes clear through the clustering analysis.
 
 ## 4.3 Hierarchical clustering (HCPC)
 The information produced by the MCA then served as input for the Hierarchical clustering upon principal components (HCPC) analysis.
+
 ```{r fig.width=12, warning=FALSE}
 options(width = 200)
 res.hcpc <- HCPC (res.mca, nb.clust = 5 , metric = "euclidean", graph = FALSE)
