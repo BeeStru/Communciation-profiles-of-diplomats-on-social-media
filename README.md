@@ -1,5 +1,5 @@
 # Communciation profiles of diplomats on social media
-Keywords: Data collection, wrangling and visualisation, sentiment analysis, correspondence and cluster analysis.
+Keywords: Data collection, wrangling, visualisation, sentiment analysis, correspondence & cluster analysis.
 
 ## Project overview
 This project analysed the content of tweets posted by Chinese diplomats on the platform X (Twitter) over
