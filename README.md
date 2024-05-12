@@ -1,9 +1,9 @@
-# Communciation profiles of diplomats on social media
+# Communication profiles of diplomats on social media
 Keywords: Data collection, wrangling, visualisation, sentiment analysis, correspondence & cluster analysis.
 
 ## Project overview
 This project analysed the content of tweets posted by Chinese diplomats on the platform X (Twitter) over
-a 5-year period. The goal was to identify distinct profiles of their communciation behaviour by combining manual content analysis and statistical analysis. 
+a 5-year period. The goal was to identify distinct profiles of their communication behaviour by combining manual content analysis and statistical analysis. 
 
 ## Research gap and motivation
 Starting 2017, the number of Chinese diplomats on foreign social media platforms have exploded. Researchers of Chinese politics know to link this to the country's leadership initative to "tell CHina's story well" as part of the "peaceful rise" strategy. 
